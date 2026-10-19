@@ -6,7 +6,7 @@ const MAX = 1000;
 
 const SOURCE_LABEL: Record<Claim['source'], string> = {
   rules: 'Answered automatically from your account records',
-  llm: 'Answered by an AI assistant from your account records',
+  llm: 'Answered by our AI assistant from your account records',
   fallback: 'Passed to a support agent',
 };
 
@@ -25,11 +25,16 @@ export function MissingReward({ userId }: { userId: string }) {
   const result = submit.data;
 
   return (
-    <section className="claim">
-      <h2>Missing reward?</h2>
-      <p className="muted">
-        Tell us what happened. We check your records first; if they don't settle it, a person will look.
-      </p>
+    <section className="card claim">
+      <div className="claim-head">
+        <span className="claim-icon" aria-hidden>
+          🧾
+        </span>
+        <div>
+          <h2>Missing a reward?</h2>
+          <p className="muted">We check your records instantly. If they don't settle it, a person will look.</p>
+        </div>
+      </div>
 
       <form
         onSubmit={(e) => {
@@ -38,7 +43,7 @@ export function MissingReward({ userId }: { userId: string }) {
         }}
       >
         <label>
-          Offer
+          Which game?
           <select value={offerId || offers.data[0].id} onChange={(e) => setOfferId(e.target.value)}>
             {offers.data.map((o) => (
               <option key={o.id} value={o.id}>
@@ -59,7 +64,7 @@ export function MissingReward({ userId }: { userId: string }) {
           />
         </label>
         <div className="claim-actions">
-          <button disabled={submit.isPending || !message.trim()}>
+          <button className="btn btn-primary" disabled={submit.isPending || !message.trim()}>
             {submit.isPending ? 'Checking…' : 'Send claim'}
           </button>
           <span className="muted small">
@@ -68,16 +73,18 @@ export function MissingReward({ userId }: { userId: string }) {
         </div>
       </form>
 
-      {submit.error && <p className="error">{(submit.error as Error).message}</p>}
+      {submit.error && <div className="notice error">{(submit.error as Error).message}</div>}
 
       {result && (
         <div className={`claim-result ${result.status}`} role="status">
-          <div className="log-head">
-            <strong>{result.status === 'resolved' ? 'Here is what we found' : 'We are looking into it'}</strong>
-            <span className={`tag ${result.status}`}>{result.status === 'resolved' ? 'answered' : 'in review'}</span>
+          <div className="row-between">
+            <strong>{result.status === 'resolved' ? 'Here is what we found' : "We're looking into it"}</strong>
+            <span className={`chip ${result.status === 'resolved' ? 'chip-green' : 'chip-muted'}`}>
+              {result.status === 'resolved' ? 'Answered' : 'In review'}
+            </span>
           </div>
           <p>{result.reply}</p>
-          <p className="muted small">{SOURCE_LABEL[result.source]}. This does not change your balance.</p>
+          <p className="muted small">{SOURCE_LABEL[result.source]}. This doesn't change your balance.</p>
         </div>
       )}
     </section>

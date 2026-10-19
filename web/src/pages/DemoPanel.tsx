@@ -2,13 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, formatCents, type SimulatedResult, type SimulateInput } from '../api';
+import { OfferArt } from '../components/OfferArt';
+import { useCountUp } from '../components/useCountUp';
 
 type Props = { userId: string };
 
-// One line in the live result log.
+type Tone = 'credited' | 'duplicate' | 'rejected';
 type LogEntry = { id: number; time: string; action: string; outcome: { text: string; tone: Tone }[] };
 type Job = { action: string; calls: SimulateInput[]; perCall?: boolean };
-type Tone = 'credited' | 'duplicate' | 'rejected';
 
 // The most important screen: it makes the backend's reliability visible.
 // The browser never holds POSTBACK_SECRET. Every button asks the dev-only endpoint
@@ -18,6 +19,7 @@ export function DemoPanel({ userId }: Props) {
   const queryClient = useQueryClient();
   const offers = useQuery({ queryKey: ['offers', userId], queryFn: () => api.offersForUser(userId) });
   const wallet = useQuery({ queryKey: ['wallet', userId], queryFn: () => api.wallet(userId) });
+  const balance = useCountUp(wallet.data?.balanceCents);
 
   const started = offers.data?.filter((o) => o.started) ?? [];
   const [offerId, setOfferId] = useState<string>('');
@@ -76,130 +78,159 @@ export function DemoPanel({ userId }: Props) {
     },
   });
 
+  const header = (
+    <div className="page-head">
+      <span className="eyebrow">You are the game studio</span>
+      <h1>Advertiser console</h1>
+      <p className="lead">
+        Send the reports a studio's tracker would send, including the messy ones. Watch the balance: it only ever moves
+        once per milestone.
+      </p>
+    </div>
+  );
+
   if (offers.isLoading) return <p className="muted">Loading…</p>;
-  if (offers.error) return <p className="error">Couldn't load offers: {(offers.error as Error).message}</p>;
+  if (offers.error) return <div className="notice error">Couldn't load offers: {(offers.error as Error).message}</div>;
 
   if (!offer || !milestone) {
     return (
-      <section>
-        <h1>Advertiser simulator</h1>
-        <div className="placeholder">
+      <>
+        {header}
+        <div className="card empty">
+          <span className="empty-icon" aria-hidden>
+            🎮
+          </span>
           <p>
-            Start an offer first. <Link to="/">Go to the offer wall →</Link>
+            First, start an offer as <strong>{userId.replace('user_', '')}</strong>. The console then sends reports for it.
           </p>
-          <p className="muted">The simulator sends postbacks for an offer that {userId} has started.</p>
+          <Link to="/" className="btn btn-primary">
+            Pick a game
+          </Link>
         </div>
-      </section>
+      </>
     );
   }
 
   const clickId = offer.clickId!;
-  const claimed = milestone.payoutCents;
   const send = (action: string, ...calls: SimulateInput[]) => run.mutate({ action, calls });
   const sendEach = (action: string, ...calls: SimulateInput[]) => run.mutate({ action, calls, perCall: true });
-  const base = { clickId, event: milestone.key, payoutCents: claimed };
+  const base = { clickId, event: milestone.key, payoutCents: milestone.payoutCents };
   const busy = run.isPending || reset.isPending;
+  const reversed = [...offer.milestones].reverse();
 
   return (
-    <section>
-      <h1>Advertiser simulator</h1>
-      <p className="muted">
-        You are the advertiser. Fire postbacks at the real endpoint and watch the money only ever move once.
-      </p>
+    <>
+      {header}
 
-      <div className="panel-top">
-        <div className="balance-card compact">
-          <span className="muted">{userId}'s balance</span>
-          <strong className="balance">{formatCents(wallet.data?.balanceCents ?? 0)}</strong>
+      <section className="console-top">
+        <div className="balance-tile">
+          <span className="muted small">{userId.replace('user_', '')}'s balance</span>
+          <strong>{formatCents(balance)}</strong>
         </div>
+        <div className="console-target card">
+          <OfferArt id={offer.id} size="small" />
+          <label>
+            Game
+            <select value={offer.id} onChange={(e) => setOfferId(e.target.value)}>
+              {started.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Milestone
+            <select value={milestone.key} onChange={(e) => setMilestoneKey(e.target.value)}>
+              {offer.milestones.map((m) => (
+                <option key={m.key} value={m.key}>
+                  {m.label} ({formatCents(m.payoutCents)}){m.credited ? ' ✓ paid' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <code className="click-id" title="The tracking id the studio sends back with every report">
+            {clickId.slice(0, 18)}…
+          </code>
+        </div>
+      </section>
 
-        <label>
-          Offer
-          <select value={offer.id} onChange={(e) => setOfferId(e.target.value)}>
-            {started.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Milestone
-          <select value={milestone.key} onChange={(e) => setMilestoneKey(e.target.value)}>
-            {offer.milestones.map((m) => (
-              <option key={m.key} value={m.key}>
-                {m.label} ({formatCents(m.payoutCents)}){m.credited ? ' ✓ paid' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="muted click-id">click: {clickId}</span>
-      </div>
-
-      <div className="actions">
-        <Action
-          title="Send valid postback"
-          hint="Signed correctly. Pays the milestone, once."
+      <section className="scenarios">
+        <Scenario
+          icon="✅"
+          tone="green"
+          title="Valid report"
+          hint="Correctly signed. Pays the milestone, once."
           disabled={busy}
-          onClick={() => send(`Valid postback: ${milestone.label}`, base)}
+          onClick={() => send(`Valid report · ${milestone.label}`, base)}
         />
-        <Action
-          title="Send the same postback 20× at once"
-          hint="Same eventId, 20 simultaneous requests. The balance must rise only once."
+        <Scenario
+          icon="⚡"
+          tone="violet"
+          featured
+          title="Same report 20× at once"
+          hint="20 simultaneous retries of one event. The balance must rise only once."
           disabled={busy}
-          onClick={() => send(`Same postback ×20 at once: ${milestone.label}`, { ...base, repeat: 20 })}
+          onClick={() => send(`Same report ×20 at once · ${milestone.label}`, { ...base, repeat: 20 })}
         />
-        <Action
-          title="Send milestones out of order"
-          hint="Last milestone first, then back to the first. Each pays once, independently; one already paid shows duplicate."
+        <Scenario
+          icon="🔀"
+          tone="blue"
+          title="Out of order"
+          hint="Last milestone first. Each pays once; an already-paid one shows duplicate."
           disabled={busy}
           onClick={() =>
             sendEach(
-              'Out of order: ' + [...offer.milestones].reverse().map((m) => m.key).join(' → '),
-              ...[...offer.milestones].reverse().map((m) => ({ clickId, event: m.key, payoutCents: m.payoutCents })),
+              'Out of order · ' + reversed.map((m) => m.key).join(' → '),
+              ...reversed.map((m) => ({ clickId, event: m.key, payoutCents: m.payoutCents })),
             )
           }
         />
-        <Action
-          title="Send with a bad signature"
-          hint="A forged request. The server answers 401 and stores nothing."
+        <Scenario
+          icon="🕵️"
+          tone="red"
+          title="Forged signature"
+          hint="An attacker without the secret. Answered 401, nothing stored."
           disabled={busy}
-          onClick={() => send('Bad signature', { ...base, validSignature: false })}
+          onClick={() => send('Forged signature', { ...base, validSignature: false })}
         />
-        <Action
-          title="Send for an unknown click"
-          hint="Valid signature, but no such click. Rejected and recorded, never credited."
+        <Scenario
+          icon="❓"
+          tone="amber"
+          title="Unknown click"
+          hint="A report for a user we never tracked. Recorded, never paid."
           disabled={busy}
           onClick={() => send('Unknown click', { ...base, clickId: 'clk_does_not_exist' })}
         />
-        <Action
-          title="Claim an inflated payout"
-          hint="Body says $999.99. We pay our own milestone amount instead."
+        <Scenario
+          icon="💸"
+          tone="amber"
+          title="Inflated payout"
+          hint="The report claims $999.99. We pay our own milestone price."
           disabled={busy}
-          onClick={() => send(`Inflated payout claim: ${milestone.label}`, { ...base, payoutCents: 99_999 })}
+          onClick={() => send(`Inflated payout · ${milestone.label}`, { ...base, payoutCents: 99_999 })}
         />
-      </div>
+      </section>
 
-      <div className="reset">
-        <button className="secondary" disabled={busy} onClick={() => reset.mutate()}>
-          Reset demo for {userId}
-        </button>
-        <span className="muted">Deletes this user's clicks, postbacks and earnings so you can run it again (demo only).</span>
-      </div>
-      {(run.error || reset.error) && <p className="error">{((run.error ?? reset.error) as Error).message}</p>}
+      {(run.error || reset.error) && <div className="notice error">{((run.error ?? reset.error) as Error).message}</div>}
 
-      <div className="two-col">
-        <div>
-          <h2>What you just sent</h2>
+      <section className="console-grid">
+        <div className="card">
+          <div className="section-head">
+            <h2>Live results</h2>
+            <button className="btn btn-ghost btn-small" disabled={busy} onClick={() => reset.mutate()}>
+              ↺ Reset demo
+            </button>
+          </div>
           {log.length === 0 ? (
-            <p className="muted">Nothing yet. Press a button above.</p>
+            <p className="muted">Nothing sent yet. Press a scenario above; start with "Same report 20× at once".</p>
           ) : (
-            <ul className="log">
+            <ul className="feed">
               {log.map((entry) => (
                 <li key={entry.id}>
-                  <div className="log-head">
+                  <div className="row-between">
                     <strong>{entry.action}</strong>
-                    <span className="muted">{entry.time}</span>
+                    <span className="muted small">{entry.time}</span>
                   </div>
                   <div className="tags">
                     {entry.outcome.map((o) => (
@@ -214,57 +245,63 @@ export function DemoPanel({ userId }: Props) {
           )}
         </div>
 
-        <div>
-          <h2>What the server stored</h2>
-          <p className="muted">GET /postbacks for this click. Forged (bad-signature) requests never get this far.</p>
+        <div className="card">
+          <div className="section-head">
+            <h2>What the server stored</h2>
+            <span className="muted small">for this click</span>
+          </div>
           {serverLog.data?.length ? (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Event</th>
-                  <th>Status</th>
-                  <th>Why</th>
-                </tr>
-              </thead>
-              <tbody>
-                {serverLog.data.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      {p.eventKey}
-                      <div className="muted small">{p.eventId.slice(0, 12)}…</div>
-                    </td>
-                    <td>
-                      <span className={`tag ${p.status}`}>{p.status}</span>
-                    </td>
-                    <td className="muted">{p.rejectReason ?? ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <ul className="stored">
+              {serverLog.data.map((p) => (
+                <li key={p.id}>
+                  <span className={`dot ${p.status}`} aria-hidden />
+                  <div>
+                    <strong>{p.eventKey}</strong>
+                    <span className="muted small"> · {p.eventId.slice(0, 14)}…</span>
+                    {p.rejectReason && <div className="muted small">{p.rejectReason.replace(/_/g, ' ')}</div>}
+                  </div>
+                  <span className={`tag ${p.status}`}>{p.status}</span>
+                </li>
+              ))}
+            </ul>
           ) : (
-            <p className="muted">No postbacks stored for this click yet.</p>
+            <p className="muted">No reports stored yet. Forged requests never get this far.</p>
           )}
         </div>
-      </div>
-    </section>
+      </section>
+    </>
   );
 }
 
-function Action(props: { title: string; hint: string; disabled: boolean; onClick: () => void }) {
+function Scenario(props: {
+  icon: string;
+  tone: 'green' | 'violet' | 'blue' | 'red' | 'amber';
+  title: string;
+  hint: string;
+  featured?: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div className="action">
-      <button disabled={props.disabled} onClick={props.onClick}>
-        {props.title}
-      </button>
-      <p className="muted small">{props.hint}</p>
-    </div>
+    <button
+      className={`scenario tone-${props.tone}${props.featured ? ' featured' : ''}`}
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      <span className="scenario-icon" aria-hidden>
+        {props.icon}
+      </span>
+      <span className="scenario-title">{props.title}</span>
+      <span className="scenario-hint">{props.hint}</span>
+      {props.featured && <span className="chip chip-green scenario-flag">Try this first</span>}
+    </button>
   );
 }
 
 // One raw result → a readable tag.
 function describe(r: SimulatedResult): { text: string; tone: Tone } {
-  if (r.httpStatus === 401) return { text: '401 bad signature', tone: 'rejected' };
-  if (r.body?.status === 'rejected') return { text: `rejected: ${r.body.reason}`, tone: 'rejected' };
+  if (r.httpStatus === 401) return { text: '401 forged', tone: 'rejected' };
+  if (r.body?.status === 'rejected') return { text: `rejected: ${r.body.reason?.replace(/_/g, ' ')}`, tone: 'rejected' };
   if (r.body?.status === 'credited' || r.body?.status === 'duplicate') {
     return { text: r.body.status, tone: r.body.status };
   }

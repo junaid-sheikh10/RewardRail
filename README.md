@@ -9,6 +9,14 @@ HTTP request), and we credit the user's wallet. That sounds easy until you remem
 are retried, can arrive twice at the same instant, out of order, late, or forged by anyone who
 finds the URL, and the one thing you must never do is **pay twice**.
 
+<p align="center">
+  <img src="docs/screenshots/earn.png" alt="RewardRail offer wall: games with milestone payouts" width="820" />
+</p>
+
+| Advertiser console: try to break it | Wallet | On a phone |
+|---|---|---|
+| <img src="docs/screenshots/console.png" alt="Advertiser console with scenarios such as 20 simultaneous reports" width="420" /> | <img src="docs/screenshots/wallet.png" alt="Wallet with balance and activity" width="420" /> | <img src="docs/screenshots/phone.png" alt="Mobile layout with bottom tab bar" width="160" /> |
+
 ## Try it in two minutes
 
 1. Open **Offers**, press **Start offer** on a game.

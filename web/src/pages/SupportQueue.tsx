@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, type ClaimStatus } from '../api';
+import { OfferArt } from '../components/OfferArt';
 
 // A simple admin view of claims. Open in this demo (no auth), see the README.
 export function SupportQueue() {
@@ -11,12 +12,15 @@ export function SupportQueue() {
   });
 
   return (
-    <section>
-      <h1>Support queue</h1>
-      <p className="muted">
-        Claims the automatic checks couldn't settle wait here. Nothing on this page can pay anyone: money moves only through
-        signed advertiser reports.
-      </p>
+    <>
+      <div className="page-head">
+        <span className="eyebrow">Internal · support team</span>
+        <h1>Support queue</h1>
+        <p className="lead">
+          "I wasn't paid" claims that our automatic checks couldn't settle. Nothing here can pay anyone: money only moves
+          through a studio's signed report.
+        </p>
+      </div>
 
       <div className="tabs" role="tablist">
         {(['needs_human', 'resolved', 'all'] as const).map((f) => (
@@ -30,47 +34,48 @@ export function SupportQueue() {
             {f === 'needs_human' ? 'Needs a person' : f === 'resolved' ? 'Answered' : 'All'}
           </button>
         ))}
-        <button className="secondary" onClick={() => claims.refetch()}>
-          Refresh
+        <button className="tab" onClick={() => claims.refetch()}>
+          ↻ Refresh
         </button>
       </div>
 
       {claims.isLoading && <p className="muted">Loading…</p>}
-      {claims.error && <p className="error">{(claims.error as Error).message}</p>}
-      {claims.data && claims.data.length === 0 && <p className="muted">Nothing here.</p>}
-
-      {claims.data && claims.data.length > 0 && (
-        <table className="table claims-table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>User · Offer</th>
-              <th>Claim</th>
-              <th>Outcome</th>
-            </tr>
-          </thead>
-          <tbody>
-            {claims.data.map((c) => (
-              <tr key={c.id}>
-                <td className="muted">{new Date(c.createdAt).toLocaleString()}</td>
-                <td>
-                  {c.user?.displayName ?? c.userId}
-                  <div className="muted small">{c.offer?.title ?? c.offerId}</div>
-                </td>
-                <td>{c.message}</td>
-                <td>
-                  <span className={`tag ${c.status}`}>{c.status === 'resolved' ? 'answered' : 'needs a person'}</span>
-                  <div className="muted small">
-                    {c.category.replace(/_/g, ' ')} · {c.source}
-                    {c.confidence !== null && ` · confidence ${c.confidence.toFixed(2)}`}
-                  </div>
-                  <div className="small">{c.reply}</div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {claims.error && <div className="notice error">{(claims.error as Error).message}</div>}
+      {claims.data && claims.data.length === 0 && (
+        <div className="card empty">
+          <span className="empty-icon" aria-hidden>
+            🎉
+          </span>
+          <p>Nothing waiting. File a claim from the Wallet page to see it here.</p>
+        </div>
       )}
-    </section>
+
+      <ul className="claims">
+        {claims.data?.map((c) => (
+          <li key={c.id} className="card claim-card">
+            <OfferArt id={c.offerId} size="small" />
+            <div className="claim-main">
+              <div className="row-between">
+                <strong>
+                  {c.user?.displayName ?? c.userId} · {c.offer?.title ?? c.offerId}
+                </strong>
+                <span className={`chip ${c.status === 'resolved' ? 'chip-green' : 'chip-muted'}`}>
+                  {c.status === 'resolved' ? 'Answered' : 'Needs a person'}
+                </span>
+              </div>
+              <p className="quote">“{c.message}”</p>
+              <p className="small">
+                <span className="muted">Reply: </span>
+                {c.reply}
+              </p>
+              <p className="muted small">
+                {new Date(c.createdAt).toLocaleString()} · {c.category.replace(/_/g, ' ')} · by {c.source}
+                {c.confidence !== null && ` · confidence ${c.confidence.toFixed(2)}`}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }

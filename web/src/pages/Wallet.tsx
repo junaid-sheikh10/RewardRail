@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { api, formatCents } from '../api';
+import { OfferArt } from '../components/OfferArt';
+import { useCountUp } from '../components/useCountUp';
 import { MissingReward } from './MissingReward';
 
 type Props = { userId: string };
@@ -9,48 +12,67 @@ export function Wallet({ userId }: Props) {
     queryKey: ['wallet', userId],
     queryFn: () => api.wallet(userId),
   });
+  const offers = useQuery({ queryKey: ['offers-all'], queryFn: api.offers });
+  const balance = useCountUp(data?.balanceCents);
 
-  if (isLoading) return <p className="muted">Loading wallet…</p>;
-  if (error) return <p className="error">Couldn't load the wallet: {(error as Error).message}</p>;
-  if (!data) return null;
+  // Map titles back to offer ids for the artwork in the history list.
+  const idByTitle = new Map(offers.data?.map((o) => [o.title, o.id]));
+
+  if (error) return <div className="notice error">Couldn't load the wallet: {(error as Error).message}</div>;
 
   return (
-    <section>
-      <h1>Wallet</h1>
-      <div className="balance-card">
-        <span className="muted">Balance</span>
-        <strong className="balance">{formatCents(data.balanceCents)}</strong>
-        <span className="muted">Always the sum of the entries below. There is no stored balance.</span>
-      </div>
+    <div className="wallet-page">
+      <section className="balance-hero">
+        <span className="eyebrow">Available balance</span>
+        <strong className="balance-big">{isLoading ? '…' : formatCents(balance)}</strong>
+        <p className="muted">
+          Always the sum of the entries below. There is no stored balance that could drift.
+        </p>
+        <div className="balance-meta">
+          <span className="chip">{data?.entries.length ?? 0} rewards</span>
+          <button className="btn btn-secondary" disabled title="Cash-outs are on the roadmap">
+            Cash out · soon
+          </button>
+        </div>
+      </section>
 
-      <h2>History</h2>
-      {data.entries.length === 0 ? (
-        <p className="muted">No earnings yet. Start an offer, then use the Advertiser simulator.</p>
-      ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>What</th>
-              <th>When</th>
-              <th className="num">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.entries.map((e) => (
-              <tr key={e.id}>
-                <td>
-                  {e.offerTitle ?? e.type}
-                  {e.milestoneLabel && <span className="muted"> · {e.milestoneLabel}</span>}
-                </td>
-                <td className="muted">{new Date(e.createdAt).toLocaleString()}</td>
-                <td className="num">{e.amountCents < 0 ? '-' : '+'}{formatCents(Math.abs(e.amountCents))}</td>
-              </tr>
+      <section className="card">
+        <div className="section-head">
+          <h2>Activity</h2>
+          <span className="muted">Newest first</span>
+        </div>
+        {data && data.entries.length === 0 ? (
+          <div className="empty">
+            <span className="empty-icon" aria-hidden>
+              🪙
+            </span>
+            <p>No earnings yet.</p>
+            <Link to="/" className="btn btn-secondary">
+              Find an offer
+            </Link>
+          </div>
+        ) : (
+          <ul className="activity">
+            {data?.entries.map((e) => (
+              <li key={e.id}>
+                <OfferArt id={idByTitle.get(e.offerTitle ?? '') ?? e.type} size="small" />
+                <div className="activity-text">
+                  <strong>{e.milestoneLabel ?? e.type}</strong>
+                  <span className="muted">
+                    {e.offerTitle ?? 'Reward'} · {new Date(e.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <strong className={e.amountCents < 0 ? 'amount negative' : 'amount'}>
+                  {e.amountCents < 0 ? '−' : '+'}
+                  {formatCents(Math.abs(e.amountCents))}
+                </strong>
+              </li>
             ))}
-          </tbody>
-        </table>
-      )}
+          </ul>
+        )}
+      </section>
 
       <MissingReward userId={userId} />
-    </section>
+    </div>
   );
 }
