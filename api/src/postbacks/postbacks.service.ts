@@ -1,14 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Click, Milestone, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PostbackDto, PostbackResult } from './dto/postback.dto';
+
+// The click plus its offer's title, loaded together so the notification needs no extra query.
+type ClickWithOffer = Click & { offer: { title: string } };
 
 type RejectReason = 'unknown_click' | 'unknown_milestone' | 'timestamp_in_future';
 
 // What we decided about a postback BEFORE writing anything.
 type Decision =
   | { kind: 'reject'; reason: RejectReason }
-  | { kind: 'credit'; click: Click; milestone: Milestone };
+  | { kind: 'credit'; click: ClickWithOffer; milestone: Milestone };
 
 // Replay protection (decision Q5). We only reject timestamps in the FUTURE beyond a
 // small clock-skew allowance. We deliberately accept old timestamps: late postbacks are
@@ -22,7 +26,10 @@ const LIST_LIMIT = 50;
 export class PostbacksService {
   private readonly logger = new Logger(PostbacksService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
   // The signature was already verified by SignatureGuard before we get here.
   //
@@ -49,7 +56,10 @@ export class PostbacksService {
       return { kind: 'reject', reason: 'timestamp_in_future' };
     }
 
-    const click = await this.prisma.click.findUnique({ where: { clickId: dto.clickId } });
+    const click = await this.prisma.click.findUnique({
+      where: { clickId: dto.clickId },
+      include: { offer: { select: { title: true } } },
+    });
     if (!click) return { kind: 'reject', reason: 'unknown_click' };
 
     const milestone = await this.prisma.milestone.findUnique({
@@ -97,6 +107,8 @@ export class PostbacksService {
       });
     });
 
+    // Only now, after the transaction has COMMITTED, tell the user's screen.
+    this.notifyCredited(click, milestone);
     return { status: 'credited', amountCents: milestone.payoutCents };
   }
 
@@ -186,7 +198,9 @@ export class PostbacksService {
         return true;
       });
 
-      return claimed ? { status: 'credited', amountCents: milestone.payoutCents } : { status: 'duplicate' };
+      if (!claimed) return { status: 'duplicate' };
+      this.notifyCredited(click, milestone); // after commit, same as the first-credit path
+      return { status: 'credited', amountCents: milestone.payoutCents };
     } catch (error) {
       // The user was meanwhile paid for this milestone through another eventId. The
       // transaction rolled back (so the row is still 'rejected'); record why, outside it.
@@ -199,6 +213,26 @@ export class PostbacksService {
         return { status: 'duplicate' };
       }
       throw error;
+    }
+  }
+
+  // Fire-and-forget (decision Q8). The money is already safely committed, so a failure
+  // here must never fail the HTTP response, roll anything back, or make the advertiser
+  // retry (a retry would just come back as "duplicate" anyway). The worst case is a
+  // missed toast; a page refresh shows the truth because the wallet reads the ledger.
+  // A crash between commit and emit loses the toast the same way. The fix for that
+  // is an outbox table (write the event in the same transaction, deliver it separately),
+  // listed under "what I'd do next" in the README.
+  private notifyCredited(click: ClickWithOffer, milestone: Milestone) {
+    try {
+      this.realtime.emitCredited({
+        userId: click.userId,
+        amountCents: milestone.payoutCents,
+        offerTitle: click.offer.title,
+        milestoneLabel: milestone.label,
+      });
+    } catch (error) {
+      this.logger.error(`Could not emit wallet.credited for user ${click.userId}`, error as Error);
     }
   }
 
