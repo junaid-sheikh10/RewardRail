@@ -292,3 +292,67 @@ describe('POST /postbacks: races and retries (Stage 3)', () => {
     });
   });
 });
+
+describe('GET /postbacks (Stage 4)', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+
+  beforeAll(async () => {
+    ({ app, prisma } = await createTestApp());
+  });
+
+  beforeEach(async () => {
+    await resetDb(prisma);
+    await seedBasics(prisma);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const list = (query = '') => request(app.getHttpServer()).get(`/postbacks${query}`).expect(200);
+
+  it('is empty when nothing has arrived', async () => {
+    expect((await list()).body).toEqual([]);
+  });
+
+  it('lists credited, duplicate and rejected postbacks, newest first', async () => {
+    await sendPostback(app, makeBody({ eventId: 'evt_1' })); // credited
+    await sendPostback(app, makeBody({ eventId: 'evt_2' })); // duplicate (same milestone)
+    await sendPostback(app, makeBody({ eventId: 'evt_3', clickId: 'clk_nope' })); // rejected
+
+    const rows = (await list()).body;
+    expect(rows.map((r: any) => [r.eventId, r.status, r.rejectReason])).toEqual([
+      ['evt_3', 'rejected', 'unknown_click'],
+      ['evt_2', 'duplicate', 'milestone_already_paid'],
+      ['evt_1', 'credited', null],
+    ]);
+  });
+
+  it('filters by clickId', async () => {
+    await sendPostback(app, makeBody({ eventId: 'evt_1' }));
+    await sendPostback(app, makeBody({ eventId: 'evt_2', clickId: 'clk_nope' }));
+
+    const rows = (await list('?clickId=clk_nope')).body;
+    expect(rows.map((r: any) => r.eventId)).toEqual(['evt_2']);
+  });
+
+  it('does not expose the raw payload', async () => {
+    await sendPostback(app, makeBody());
+    expect((await list()).body[0]).not.toHaveProperty('rawPayload');
+  });
+
+  it('is capped at 50 rows', async () => {
+    await prisma.postback.createMany({
+      data: Array.from({ length: 60 }, (_, i) => ({
+        eventId: `evt_${i}`,
+        clickId: 'clk_test',
+        eventKey: 'level_5',
+        payoutCents: 100,
+        rawPayload: {},
+        status: 'duplicate' as const,
+      })),
+    });
+    expect((await list()).body).toHaveLength(50);
+  });
+});

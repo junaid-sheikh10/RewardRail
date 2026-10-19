@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotImplementedException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Click, Milestone, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PostbackDto, PostbackResult } from './dto/postback.dto';
@@ -15,6 +15,8 @@ type Decision =
 // real money for a real user, and replays are already harmless because a valid
 // signature + the unique eventId means a replay can never pay twice.
 const MAX_FUTURE_SKEW_SECONDS = 5 * 60;
+
+const LIST_LIMIT = 50;
 
 @Injectable()
 export class PostbacksService {
@@ -224,9 +226,26 @@ export class PostbacksService {
     };
   }
 
-  // TODO (Stage 4): recent postbacks for the demo panel, newest first,
-  // including duplicates and rejected ones. Filter by clickId if given; cap at ~50.
-  async list(_clickId?: string): Promise<unknown[]> {
-    throw new NotImplementedException('GET /postbacks is not implemented yet');
+  // Recent postbacks for the demo panel, newest first, INCLUDING duplicates and
+  // rejections: seeing why something was not paid is the whole point of storing them.
+  // Capped, so a busy click can't turn this into an unbounded query.
+  // Not stored, so not listed: requests with a bad signature (rejected by the guard
+  // before reaching the database). The demo panel shows those from its own response.
+  list(clickId?: string) {
+    return this.prisma.postback.findMany({
+      where: clickId ? { clickId } : undefined,
+      orderBy: { receivedAt: 'desc' },
+      take: LIST_LIMIT,
+      select: {
+        id: true,
+        eventId: true,
+        clickId: true,
+        eventKey: true,
+        payoutCents: true, // what the advertiser claimed (we may have paid a different amount)
+        status: true,
+        rejectReason: true,
+        receivedAt: true,
+      },
+    });
   }
 }
