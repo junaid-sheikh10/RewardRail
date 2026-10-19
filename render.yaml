@@ -1,0 +1,35 @@
+# Render Blueprint: API + Postgres. In Render: New → Blueprint → pick this repo.
+# NOT verified against Render itself (the Dockerfile it uses IS verified locally):
+# check Render's current plan limits before relying on the free tier for anything lasting.
+databases:
+  - name: rewardrail-db
+    databaseName: rewardrail
+    plan: free
+
+services:
+  - type: web
+    name: rewardrail-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rewardrail-db
+          property: connectionString
+      - key: POSTBACK_SECRET
+        generateValue: true # a random secret, never committed
+      - key: NODE_ENV
+        value: production
+      # Public demo: keeps the advertiser simulator (/dev/*) available. The database holds
+      # only demo data, so anyone creating credits for the demo users is acceptable.
+      # Remove this on anything real.
+      - key: DEMO_MODE
+        value: "true"
+      - key: SEED_ON_START # the seed is idempotent
+        value: "true"
+      - key: WEB_ORIGIN # set to the web app's URL after you deploy it, e.g. https://rewardrail.vercel.app
+        sync: false
+      - key: LLM_API_KEY # optional: enables AI claim triage
+        sync: false

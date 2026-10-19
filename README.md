@@ -215,15 +215,33 @@ a real deployment would need to cover in its privacy policy.
 
 ## Deploying
 
-The API needs Node and Postgres; the web app is static files.
+The API is a container (Postgres alongside it); the web app is static files. **The `Dockerfile` is
+verified locally**: built from scratch and run against an empty database, it applied all migrations,
+seeded the demo data, ran as a non-root user, and passed the 20-concurrent-postbacks check. The
+Render and Vercel files below are written from their documented formats and have **not** been run on
+those services.
 
-1. **API + Postgres** (Render, Railway or Fly): set `DATABASE_URL`, `POSTBACK_SECRET` (a long random
-   value), `WEB_ORIGIN` (the web app's URL), `NODE_ENV=production`, and `DEMO_MODE=true` if you
-   want the simulator on a public demo. Build with `npm run build --workspace api`; on release run
-   `npx prisma migrate deploy` (and `npm run db:seed --workspace api` once for the demo data);
-   start with `npm run start --workspace api`.
-2. **Web** (Vercel or Netlify): build `npm run build --workspace web` with `VITE_API_URL` set to
-   the API's public URL (no trailing slash). Publish `web/dist`.
+1. **API + Postgres on Render:** New → Blueprint → select this repo (it reads [`render.yaml`](render.yaml)).
+   It creates the database and the API, generates a random `POSTBACK_SECRET`, and turns on
+   `DEMO_MODE` and `SEED_ON_START` (demo data on first boot; the seed is idempotent). After the web app
+   exists, set `WEB_ORIGIN` to its URL. On every start the container applies pending migrations
+   (`prisma migrate deploy`) before serving. Any other container host (Railway, Fly) works with the same
+   `Dockerfile` and the environment variables in the table above.
+2. **Web on Vercel (or Netlify):** import the repo, set the **Root Directory** to `web`, and set
+   `VITE_API_URL` to the API's public URL (no trailing slash). [`web/vercel.json`](web/vercel.json)
+   adds the single-page-app rewrite.
+3. **Check it:** open `<api-url>/health`, then the web app, then run the demo steps above.
+
+For anything that isn't a public demo: remove `DEMO_MODE` (so `/dev/*` returns 404), don't seed, and
+put real authentication in front of the user routes first.
+
+Local container check, if you want to reproduce what I did:
+
+```bash
+docker build -t rewardrail-api .
+docker run --rm --network host -e PORT=3100 -e POSTBACK_SECRET=local -e SEED_ON_START=true \
+  -e DATABASE_URL="postgresql://rewardrail:rewardrail@localhost:5433/<an empty database>" rewardrail-api
+```
 
 ## Project layout
 
@@ -242,6 +260,8 @@ web/
   src/pages/            Offer wall, Wallet (+ claim form), Advertiser simulator, Support queue
   src/useWalletSocket.ts live toasts
 docker-compose.yml      Postgres 16 (+ a test database)
+Dockerfile              the API as a container; render.yaml: Render blueprint
+docs/DEMO_SCRIPT.md     a 100-second demo video script
 CLAUDE.md               spec, phases, decisions
 ```
 
