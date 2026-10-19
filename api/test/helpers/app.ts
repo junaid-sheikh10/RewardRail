@@ -16,6 +16,6 @@ export async function createTestApp(): Promise<{ app: INestApplication; prisma: 
 // Empties every table. Call in beforeEach so each test starts clean.
 export async function resetDb(prisma: PrismaService) {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "LedgerEntry", "Postback", "Click", "Milestone", "Offer", "User" CASCADE',
+    'TRUNCATE "Claim", "LedgerEntry", "Postback", "Click", "Milestone", "Offer", "User" CASCADE',
   );
 }

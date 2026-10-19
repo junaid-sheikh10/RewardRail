@@ -19,6 +19,7 @@ model User {
   createdAt     DateTime      @default(now())
   clicks        Click[]
   ledgerEntries LedgerEntry[]
+  claims        Claim[]
 }
 
 model Offer {
@@ -30,6 +31,7 @@ model Offer {
   milestones    Milestone[]
   clicks        Click[]
   ledgerEntries LedgerEntry[]
+  claims        Claim[]
 }
 
 model Milestone {
@@ -113,4 +115,48 @@ model LedgerEntry {
   // even if two different eventIds race each other.
   @@unique([userId, milestoneId])
   @@index([userId])
+}
+
+enum ClaimStatus {
+  resolved // answered (by a rule or by the model with enough confidence)
+  needs_human // waiting in the support queue
+}
+
+enum ClaimCategory {
+  already_credited // rules: every milestone of the offer is already paid
+  not_started // rules: the user never started the offer
+  postback_rejected // rules: the advertiser's event reached us but was rejected
+  not_tracked_yet // model: we haven't received the event yet
+  likely_fraud // model: the claim looks suspicious
+  needs_human // nobody could decide
+}
+
+// Where the answer came from. "fallback" = the model was unavailable, returned
+// invalid JSON, or was not confident enough, so a person has to look.
+enum ClaimSource {
+  rules
+  llm
+  fallback
+}
+
+// A "missing reward" claim. The triage can ONLY read facts and write THIS table:
+// it never touches LedgerEntry. Money still moves only through signed postbacks.
+model Claim {
+  id         String        @id @default(cuid())
+  userId     String
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offerId    String
+  offer      Offer         @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  message    String
+  status     ClaimStatus
+  category   ClaimCategory
+  source     ClaimSource
+  confidence Float? // only set when the model answered
+  reply      String
+  createdAt  DateTime      @default(now())
+
+  // One claim per user and offer: stops a user spamming claims (and burning model
+  // credits). The database enforces it, like the other "only once" rules.
+  @@unique([userId, offerId])
+  @@index([status])
 }

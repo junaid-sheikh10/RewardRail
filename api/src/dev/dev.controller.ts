@@ -53,7 +53,7 @@ export class DevController {
     return { eventId: JSON.parse(body).eventId as string, results };
   }
 
-  // Lets the demo be run again: wipes ONE user's clicks, postbacks and ledger entries.
+  // Lets the demo be run again: wipes ONE user's clicks, postbacks, claims and ledger entries.
   // Deliberately NOT how the real ledger works (it is append-only); this is a demo reset.
   @Post('reset')
   @HttpCode(200)
@@ -61,6 +61,7 @@ export class DevController {
     return this.prisma.$transaction(async (tx) => {
       const clicks = await tx.click.findMany({ where: { userId: dto.userId }, select: { clickId: true } });
       const clickIds = clicks.map((c) => c.clickId);
+      await tx.claim.deleteMany({ where: { userId: dto.userId } });
       const ledger = await tx.ledgerEntry.deleteMany({ where: { userId: dto.userId } });
       const postbacks = await tx.postback.deleteMany({ where: { clickId: { in: clickIds } } });
       await tx.click.deleteMany({ where: { userId: dto.userId } });
