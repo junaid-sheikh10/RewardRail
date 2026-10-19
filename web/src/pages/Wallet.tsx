@@ -1,21 +1,54 @@
+import { useQuery } from '@tanstack/react-query';
+import { api, formatCents } from '../api';
+
 type Props = { userId: string };
 
-// TODO (Phase 4): GET /users/:id/wallet
-// - big balance number (formatCents)
-// - transaction list: amount, offer title, milestone label, time
-// TODO (Phase 3/4): listen for `wallet.credited` over Socket.IO, show a toast
-//   "You earned $2.50 — Dragon Quest Saga, Reach level 10" and refetch the wallet.
 // TODO (Phase 6): "Missing reward?" form → POST /claims
 export function Wallet({ userId }: Props) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['wallet', userId],
+    queryFn: () => api.wallet(userId),
+  });
+
+  if (isLoading) return <p className="muted">Loading wallet…</p>;
+  if (error) return <p className="error">Couldn't load the wallet: {(error as Error).message}</p>;
+  if (!data) return null;
+
   return (
     <section>
       <h1>Wallet</h1>
-      <div className="placeholder">
-        <p>
-          Balance and transaction history for <code>{userId}</code> will appear here.
-        </p>
-        <p className="muted">Phase 4 · backed by GET /users/:id/wallet</p>
+      <div className="balance-card">
+        <span className="muted">Balance</span>
+        <strong className="balance">{formatCents(data.balanceCents)}</strong>
+        <span className="muted">Always the sum of the entries below. There is no stored balance.</span>
       </div>
+
+      <h2>History</h2>
+      {data.entries.length === 0 ? (
+        <p className="muted">No earnings yet. Start an offer, then use the Advertiser simulator.</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>What</th>
+              <th>When</th>
+              <th className="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.entries.map((e) => (
+              <tr key={e.id}>
+                <td>
+                  {e.offerTitle ?? e.type}
+                  {e.milestoneLabel && <span className="muted"> · {e.milestoneLabel}</span>}
+                </td>
+                <td className="muted">{new Date(e.createdAt).toLocaleString()}</td>
+                <td className="num">{e.amountCents < 0 ? '-' : '+'}{formatCents(Math.abs(e.amountCents))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </section>
   );
 }

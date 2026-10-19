@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ClicksModule } from './clicks/clicks.module';
+import { DevModule } from './dev/dev.module';
 import { HealthModule } from './health/health.module';
 import { OffersModule } from './offers/offers.module';
 import { PostbacksModule } from './postbacks/postbacks.module';
@@ -16,6 +17,7 @@ import { WalletModule } from './wallet/wallet.module';
     ClicksModule,
     PostbacksModule,
     WalletModule,
+    DevModule, // demo-only routes; every route in it 404s when NODE_ENV=production
   ],
 })
 export class AppModule {}
