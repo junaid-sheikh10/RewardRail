@@ -34,8 +34,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
   if (!res.ok) {
+    // Nest answers errors as {statusCode, message, error}: show the message, not the raw JSON.
     const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} on ${path}${text ? `: ${text}` : ''}`);
+    let detail = text;
+    try {
+      const body = JSON.parse(text) as { message?: string | string[] };
+      if (body.message) detail = Array.isArray(body.message) ? body.message.join(', ') : body.message;
+    } catch {
+      /* not JSON: keep the raw text */
+    }
+    throw new Error(detail || `${res.status} on ${path}`);
   }
   return res.json() as Promise<T>;
 }
@@ -90,6 +98,22 @@ export type WalletCreditedEvent = {
   milestoneLabel: string;
 };
 
+export type ClaimStatus = 'resolved' | 'needs_human';
+export type Claim = {
+  id: string;
+  userId: string;
+  offerId: string;
+  message: string;
+  status: ClaimStatus;
+  category: string;
+  source: 'rules' | 'llm' | 'fallback';
+  confidence: number | null;
+  reply: string;
+  createdAt: string;
+  offer?: { title: string };
+  user?: { displayName: string };
+};
+
 const post = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'POST', body: JSON.stringify(body) });
 
@@ -99,6 +123,10 @@ export const api = {
   startOffer: (userId: string, offerId: string) => post<{ clickId: string }>('/clicks', { userId, offerId }),
   wallet: (userId: string) => request<Wallet>(`/users/${userId}/wallet`),
   postbacks: (clickId: string) => request<PostbackRow[]>(`/postbacks?clickId=${encodeURIComponent(clickId)}`),
+
+  createClaim: (userId: string, offerId: string, message: string) =>
+    post<Claim>('/claims', { userId, offerId, message }),
+  claims: (status?: ClaimStatus) => request<Claim[]>(`/claims${status ? `?status=${status}` : ''}`),
 
   // Demo panel only. The server signs and sends these (the browser never sees the secret).
   simulatePostback: (input: SimulateInput) =>

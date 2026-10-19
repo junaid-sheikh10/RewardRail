@@ -17,6 +17,7 @@ finds the URL, and the one thing you must never do is **pay twice**.
 4. Try **bad signature** (401, nothing stored), **unknown click** (rejected, kept for inspection),
    **inflated payout** (we pay our own amount) and **out of order** (each milestone pays once).
 5. Open the **Wallet** in a second window: a toast appears live when a credit lands.
+6. On the Wallet page, use **Missing reward?** to file a claim, then look at the **Support queue**.
 
 ## Architecture
 
@@ -104,6 +105,7 @@ the UNIQUE constraints stop double payment under concurrency.
 | `DATABASE_URL`, `TEST_DATABASE_URL` | Main and test databases. They must differ: tests wipe theirs. |
 | `POSTBACK_SECRET` | Shared HMAC secret with the advertiser. The app **refuses to start without it**. |
 | `WEB_ORIGIN` | Frontend origin, for CORS (HTTP and Socket.IO). |
+| `LLM_API_KEY`, `LLM_MODEL` | Optional. Enables AI claim triage (default model `claude-opus-5-5`). With no key the feature degrades gracefully: claims the rules can't settle wait for a person. |
 | `DEMO_MODE` | `true` keeps the `/dev/*` simulator on when `NODE_ENV=production` (public demo only). |
 | `PORT` | API port, default 3000. |
 
@@ -118,6 +120,8 @@ the UNIQUE constraints stop double payment under concurrency.
 | `GET /users/:id/wallet` | `{balanceCents, entries}`. The balance is `SUM(amountCents)` of the ledger. |
 | `GET /postbacks?clickId=` | Recent postbacks including duplicates and rejections (newest first, max 50). |
 | WebSocket `wallet.credited` | `{userId, amountCents, offerTitle, milestoneLabel}`, sent to that user's room after a credit commits. |
+| `POST /claims` `{userId, offerId, message}` | "I wasn't paid." Answers from rules, then (optionally) a model, else queues for a person. Never changes a balance. |
+| `GET /claims?status=` | The support queue (`needs_human` or `resolved`), newest first. |
 | `POST /dev/simulate-postback`, `POST /dev/reset` | Demo only (see Tradeoffs). |
 
 `POST /postbacks` answers **200** for `credited`, `duplicate` **and** `rejected` (the request was
@@ -148,6 +152,31 @@ Two Postgres facts that shaped the code, worth knowing:
   separate small write.
 - Money is **integer cents** everywhere, and the ledger is **append-only**: the balance is
   `SUM(amountCents)`, with no balance column that could drift.
+
+## AI claim triage ("Missing reward?")
+
+A user says "I reached level 10 but wasn't paid." Instead of making support dig through four tables:
+
+1. **Code gathers the facts**: the user's clicks, the advertiser's postbacks (including rejected ones) and the ledger lines for that offer.
+2. **Deterministic rules answer first** (free, instant, can't hallucinate): never started the offer, every milestone already paid (quoting the ledger lines), or a rejected report (with the reason in plain words).
+3. **Only if still unclear, a model** classifies the claim (`already_credited | not_tracked_yet | likely_fraud | needs_human`) and drafts a reply.
+4. **Anything doubtful goes to a person.**
+
+The point of the design is what the model is *not* allowed to do:
+
+| Risk | Control | Proven by |
+|---|---|---|
+| The model creates or moves money | There is **no code path** from the claims service to the ledger; it only reads facts and writes the `Claim` table. Every claim test asserts the ledger count is unchanged. | claims e2e tests |
+| Invalid or hostile model output | Output is **untrusted input**: parsed and validated with **zod** (category, confidence 0..1, reply length). Invalid JSON or the wrong shape → human queue. | 13 parsing cases |
+| Overconfident guess | Confidence **below 0.7** → human queue, and the model's reply is not shown. | boundary tests at 0.69 and 0.7 |
+| Model down, refusing, slow, or no key | Any failure → human queue; the request still succeeds. No `LLM_API_KEY` → feature disabled, app unaffected. 20 s timeout, one retry. | throwing/disabled tests |
+| Prompt injection in the claim text | The message is sent as a **JSON string value** (it cannot close a wrapper and pose as instructions); the system prompt marks it untrusted. The model only sees minimal facts: **no user, click or event ids**. | payload tests |
+| Wasted money / abuse | Rules run first so most claims cost nothing. One claim per user and offer (database constraint), message capped at 1000 characters. | 409 and concurrency tests |
+
+Limits worth stating: a model-drafted reply is shown to the user and *can still be wrong* even when
+well-formed (it is a draft, labelled as such in the UI, and low-confidence ones never reach the user);
+the support queue has no auth in this demo; and the model sees the user's free-text message, which
+a real deployment would need to cover in its privacy policy.
 
 ## Tradeoffs and known limits
 
@@ -206,10 +235,11 @@ api/
   src/wallet/           balance (derived from the ledger) and history
   src/offers/           offers and per-user progress
   src/realtime/         Socket.IO gateway (wallet.credited)
+  src/claims/           claim triage: facts, rules, model port + Anthropic adapter, queue
   src/dev/              demo-only simulator and reset
   test/                 e2e tests against real Postgres
 web/
-  src/pages/            Offer wall, Wallet, Advertiser simulator
+  src/pages/            Offer wall, Wallet (+ claim form), Advertiser simulator, Support queue
   src/useWalletSocket.ts live toasts
 docker-compose.yml      Postgres 16 (+ a test database)
 CLAUDE.md               spec, phases, decisions
@@ -230,6 +260,9 @@ confirming they fail. That caught real problems in AI-written output:
 - A wallet test assumed an unordered query returned rows in a fixed order; it passed for a while
   and then failed once Postgres returned them differently.
 - A first mutation check didn't even compile and so "proved" nothing; it was redone.
+- The model tests use a **fake model** and force `LLM_API_KEY` empty, so the suite can never make a paid call, even if a real key is in `.env`.
 
 Other limits: I have not clicked through every button in a browser session (the API and socket
-paths are tested end to end, and the pages were checked with headless screenshots).
+paths are tested end to end, and the pages were checked with headless screenshots). The real
+Anthropic call is unit-tested for the request it builds, and was not exercised against the live API
+in this repository's tests.

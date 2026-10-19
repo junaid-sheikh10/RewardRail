@@ -4,6 +4,7 @@ import { NavLink, Route, Routes } from 'react-router-dom';
 import { DEMO_USERS, formatCents, type WalletCreditedEvent } from './api';
 import { DemoPanel } from './pages/DemoPanel';
 import { OfferWall } from './pages/OfferWall';
+import { SupportQueue } from './pages/SupportQueue';
 import { Wallet } from './pages/Wallet';
 import { Toasts, type Toast } from './Toasts';
 import { useWalletSocket } from './useWalletSocket';
@@ -40,6 +41,7 @@ export function App() {
           </NavLink>
           <NavLink to="/wallet">Wallet</NavLink>
           <NavLink to="/demo">Advertiser simulator</NavLink>
+          <NavLink to="/support">Support queue</NavLink>
         </nav>
         <label className="user-switch">
           User
@@ -58,6 +60,7 @@ export function App() {
           <Route path="/" element={<OfferWall userId={userId} />} />
           <Route path="/wallet" element={<Wallet userId={userId} />} />
           <Route path="/demo" element={<DemoPanel userId={userId} />} />
+          <Route path="/support" element={<SupportQueue />} />
         </Routes>
       </main>
 

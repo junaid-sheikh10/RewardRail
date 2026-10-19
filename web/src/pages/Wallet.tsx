@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { api, formatCents } from '../api';
+import { MissingReward } from './MissingReward';
 
 type Props = { userId: string };
 
-// TODO (Phase 6): "Missing reward?" form → POST /claims
 export function Wallet({ userId }: Props) {
   const { data, isLoading, error } = useQuery({
     queryKey: ['wallet', userId],
@@ -49,6 +49,8 @@ export function Wallet({ userId }: Props) {
           </tbody>
         </table>
       )}
+
+      <MissingReward userId={userId} />
     </section>
   );
 }
