@@ -112,9 +112,8 @@ export class PostbacksService {
     const target = [error.meta?.target].flat().map(String);
 
     if (target.includes('eventId')) {
-      // This exact event was already received. A retry, not an error.
-      // (Stage 3 refines this: a previously REJECTED eventId must be re-evaluated.)
-      return { status: 'duplicate' };
+      // This exact event was already received: a retry, not an error.
+      return this.handleRetry(dto);
     }
 
     if (target.includes('milestoneId')) {
@@ -134,6 +133,79 @@ export class PostbacksService {
     }
 
     throw error; // a unique violation we did not expect: do not hide it
+  }
+
+  // The advertiser sent an eventId we already have.
+  //
+  // - Already credited or recorded as a duplicate: nothing to do, answer "duplicate".
+  // - Previously REJECTED (decision Q4): the rejection may have been temporary, e.g. the
+  //   event reached us before the user's click existed. Blocking that eventId forever
+  //   would lose a real payment, so we judge it again against what we know now.
+  private async handleRetry(dto: PostbackDto): Promise<PostbackResult> {
+    const existing = await this.prisma.postback.findUnique({ where: { eventId: dto.eventId } });
+    if (!existing || existing.status !== 'rejected') return { status: 'duplicate' };
+
+    const decision = await this.decide(dto);
+
+    if (decision.kind === 'reject') {
+      // Still not payable. Keep the row, refresh the reason and the latest payload.
+      const { eventId: _same, ...fields } = this.postbackData(dto, 'rejected', decision.reason);
+      await this.prisma.postback.updateMany({
+        where: { id: existing.id, status: 'rejected' },
+        data: fields,
+      });
+      return { status: 'rejected', reason: decision.reason };
+    }
+
+    const { click, milestone } = decision;
+    try {
+      const claimed = await this.prisma.$transaction(async (tx) => {
+        // THE CLAIM. "Update this row, but only if it is still rejected." If 20 retries
+        // arrive together, Postgres lets one update through; the others wait for its row
+        // lock, then re-check the condition, find the row already 'credited', and match
+        // 0 rows. Only the winner (count = 1) goes on to write the ledger entry.
+        const { eventId: _same, ...fields } = this.postbackData(dto, 'credited');
+        const claim = await tx.postback.updateMany({
+          where: { id: existing.id, status: 'rejected' },
+          data: { ...fields, rejectReason: null },
+        });
+        if (claim.count === 0) return false; // someone else won the race
+
+        await tx.ledgerEntry.create({
+          data: {
+            userId: click.userId,
+            amountCents: milestone.payoutCents,
+            type: 'reward',
+            offerId: click.offerId,
+            milestoneId: milestone.id,
+            postbackId: existing.id,
+          },
+        });
+        return true;
+      });
+
+      return claimed ? { status: 'credited', amountCents: milestone.payoutCents } : { status: 'duplicate' };
+    } catch (error) {
+      // The user was meanwhile paid for this milestone through another eventId. The
+      // transaction rolled back (so the row is still 'rejected'); record why, outside it.
+      if (this.isUniqueViolationOn(error, 'milestoneId')) {
+        const { eventId: _same, ...fields } = this.postbackData(dto, 'duplicate', 'milestone_already_paid');
+        await this.prisma.postback.updateMany({
+          where: { id: existing.id, status: 'rejected' },
+          data: fields,
+        });
+        return { status: 'duplicate' };
+      }
+      throw error;
+    }
+  }
+
+  private isUniqueViolationOn(error: unknown, field: string): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002' &&
+      [error.meta?.target].flat().map(String).includes(field)
+    );
   }
 
   private postbackData(

@@ -39,7 +39,9 @@ describe('GET /users/:id/wallet', () => {
       },
       include: { milestones: true },
     });
-    const [m5, m10] = offer.milestones;
+    // Look milestones up by key: a query without ORDER BY gives no promise about row order.
+    const m5 = offer.milestones.find((m) => m.key === 'level_5')!;
+    const m10 = offer.milestones.find((m) => m.key === 'level_10')!;
     await prisma.ledgerEntry.create({
       data: { userId: 'user_t', amountCents: 100, offerId: offer.id, milestoneId: m5.id, createdAt: new Date('2026-01-01') },
     });

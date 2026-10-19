@@ -3,7 +3,7 @@ import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp, resetDb } from './helpers/app';
 import { signBody } from '../src/postbacks/signature';
-import { makeBody, secret, sendPostback } from './helpers/postbacks';
+import { createClick, makeBody, secret, sendPostback, seedBasics } from './helpers/postbacks';
 
 // Phase 2: these tests are written WHILE implementing the postback logic.
 // They run against the real test database (no mocks), which is the only way
@@ -80,24 +80,9 @@ describe('POST /postbacks: crediting (Stage 2)', () => {
     ({ app, prisma } = await createTestApp());
   });
 
-  // Alice has started offer_t, which has two milestones: level_5 ($1.00), level_10 ($2.50).
   beforeEach(async () => {
     await resetDb(prisma);
-    await prisma.user.create({ data: { id: 'user_t', displayName: 'Tester' } });
-    await prisma.offer.create({
-      data: {
-        id: 'offer_t',
-        title: 'Dragon',
-        description: 'd',
-        milestones: {
-          create: [
-            { key: 'level_5', label: 'Reach level 5', payoutCents: 100, sortOrder: 0 },
-            { key: 'level_10', label: 'Reach level 10', payoutCents: 250, sortOrder: 1 },
-          ],
-        },
-      },
-    });
-    await prisma.click.create({ data: { clickId: 'clk_test', userId: 'user_t', offerId: 'offer_t' } });
+    await seedBasics(prisma);
   });
 
   afterAll(async () => {
@@ -184,9 +169,126 @@ describe('POST /postbacks: crediting (Stage 2)', () => {
   });
 });
 
-describe('POST /postbacks: races (Stage 3)', () => {
-  it.todo('same postback 50× concurrently (Promise.all) → exactly one ledger entry');
-  it.todo('50× concurrently with DIFFERENT eventIds for the same milestone → exactly one ledger entry');
-  it.todo('rejected unknown_click retried after the click exists → credited');
-  it.todo('20× concurrent retries of a rejected eventId, click now exists → exactly one credit');
+describe('POST /postbacks: races and retries (Stage 3)', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+
+  beforeAll(async () => {
+    ({ app, prisma } = await createTestApp());
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const statuses = (results: { body: { status: string } }[]) => {
+    const count: Record<string, number> = {};
+    for (const r of results) count[r.body.status] = (count[r.body.status] ?? 0) + 1;
+    return count;
+  };
+
+  describe('with a known click', () => {
+    beforeEach(async () => {
+      await resetDb(prisma);
+      await seedBasics(prisma);
+    });
+
+    it('same postback 50× concurrently (Promise.all) → exactly one ledger entry', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 50 }, () => sendPostback(app, makeBody())),
+      );
+      expect(results.every((r) => r.status === 200)).toBe(true);
+      expect(statuses(results)).toEqual({ credited: 1, duplicate: 49 });
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+      expect(await prisma.postback.count()).toBe(1);
+      expect((await prisma.ledgerEntry.findFirstOrThrow()).amountCents).toBe(250);
+    });
+
+    it('50× concurrently with DIFFERENT eventIds for the same milestone → exactly one ledger entry', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 50 }, (_, i) => sendPostback(app, makeBody({ eventId: `evt_${i}` }))),
+      );
+      expect(results.every((r) => r.status === 200)).toBe(true);
+      expect(statuses(results)).toEqual({ credited: 1, duplicate: 49 });
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+      // Every attempt is still on record, so support can see what the advertiser sent.
+      expect(await prisma.postback.count()).toBe(50);
+      expect(await prisma.postback.count({ where: { status: 'credited' } })).toBe(1);
+    });
+
+    it('a mix of two milestones sent concurrently → each paid exactly once', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 40 }, (_, i) =>
+          sendPostback(app, makeBody({ eventId: `evt_${i}`, event: i % 2 ? 'level_5' : 'level_10' })),
+        ),
+      );
+      expect(statuses(results)).toEqual({ credited: 2, duplicate: 38 });
+      expect(await prisma.ledgerEntry.count()).toBe(2);
+    });
+  });
+
+  // Decision Q4: a REJECTED eventId must not stay blocked forever. The advertiser may
+  // report the event before our click exists (click-creation lag); its retry must pay.
+  describe('retrying a rejected postback', () => {
+    beforeEach(async () => {
+      await resetDb(prisma);
+      await seedBasics(prisma, { withClick: false });
+    });
+
+    it('rejected (unknown_click), then the click exists, then retried → credited', async () => {
+      const first = await sendPostback(app, makeBody()).expect(200);
+      expect(first.body).toEqual({ status: 'rejected', reason: 'unknown_click' });
+
+      await createClick(prisma);
+      const retry = await sendPostback(app, makeBody()).expect(200);
+      expect(retry.body).toEqual({ status: 'credited', amountCents: 250 });
+
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+      expect(await prisma.postback.count()).toBe(1); // updated in place, not a second row
+      expect(await prisma.postback.findUniqueOrThrow({ where: { eventId: 'evt_001' } })).toMatchObject({
+        status: 'credited',
+        rejectReason: null,
+      });
+
+      // ...and a further retry is now an ordinary duplicate.
+      const again = await sendPostback(app, makeBody()).expect(200);
+      expect(again.body).toEqual({ status: 'duplicate' });
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+    });
+
+    it('retried while the click STILL does not exist → rejected again, nothing credited', async () => {
+      await sendPostback(app, makeBody()).expect(200);
+      const retry = await sendPostback(app, makeBody()).expect(200);
+      expect(retry.body).toEqual({ status: 'rejected', reason: 'unknown_click' });
+      expect(await prisma.ledgerEntry.count()).toBe(0);
+      expect(await prisma.postback.count()).toBe(1);
+    });
+
+    it('20× concurrent retries of a rejected eventId, click now exists → exactly one credit', async () => {
+      await sendPostback(app, makeBody()).expect(200); // rejected: no click yet
+      await createClick(prisma);
+
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => sendPostback(app, makeBody())),
+      );
+      expect(results.every((r) => r.status === 200)).toBe(true);
+      expect(statuses(results)).toEqual({ credited: 1, duplicate: 19 });
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+      expect(await prisma.postback.count()).toBe(1);
+    });
+
+    it('rejected eventId retried after the user was paid via ANOTHER eventId → duplicate, paid once', async () => {
+      await sendPostback(app, makeBody({ eventId: 'evt_early' })).expect(200); // rejected
+      await createClick(prisma);
+      await sendPostback(app, makeBody({ eventId: 'evt_other' })).expect(200); // credited
+
+      const retry = await sendPostback(app, makeBody({ eventId: 'evt_early' })).expect(200);
+      expect(retry.body).toEqual({ status: 'duplicate' });
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+      expect(await prisma.postback.findUniqueOrThrow({ where: { eventId: 'evt_early' } })).toMatchObject({
+        status: 'duplicate',
+        rejectReason: 'milestone_already_paid',
+      });
+    });
+  });
 });
