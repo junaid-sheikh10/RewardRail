@@ -1,3 +1,4 @@
+import 'dotenv/config'; // first: decorators such as the gateway's CORS read process.env when their file is imported
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';

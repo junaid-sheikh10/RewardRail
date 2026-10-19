@@ -7,6 +7,7 @@ type Props = { userId: string };
 
 // One line in the live result log.
 type LogEntry = { id: number; time: string; action: string; outcome: { text: string; tone: Tone }[] };
+type Job = { action: string; calls: SimulateInput[]; perCall?: boolean };
 type Tone = 'credited' | 'duplicate' | 'rejected';
 
 // The most important screen: it makes the backend's reliability visible.
@@ -45,22 +46,24 @@ export function DemoPanel({ userId }: Props) {
       queryClient.invalidateQueries({ queryKey: ['postbacks'] }),
     ]);
 
-  const record = (action: string, results: SimulatedResult[]) => {
+  const record = (job: Job, results: SimulatedResult[]) => {
+    // perCall: one tag per request, labelled with its milestone (so you can see WHICH one paid).
+    const outcome = job.perCall
+      ? results.map((r, i) => ({ ...describe(r), text: `${job.calls[i].event}: ${describe(r).text}` }))
+      : summarise(results);
     setNextId((n) => n + 1);
-    setLog((current) =>
-      [{ id: nextId, time: new Date().toLocaleTimeString(), action, outcome: summarise(results) }, ...current].slice(0, 30),
-    );
+    setLog((current) => [{ id: nextId, time: new Date().toLocaleTimeString(), action: job.action, outcome }, ...current].slice(0, 30));
   };
 
   const run = useMutation({
-    mutationFn: async (job: { action: string; calls: SimulateInput[] }) => {
+    mutationFn: async (job: Job) => {
       // Sequential between calls (so "out of order" really is in order), parallel inside one call.
       const all: SimulatedResult[] = [];
       for (const call of job.calls) all.push(...(await api.simulatePostback(call)).results);
       return all;
     },
     onSuccess: (results, job) => {
-      record(job.action, results);
+      record(job, results);
       return refresh();
     },
   });
@@ -93,6 +96,7 @@ export function DemoPanel({ userId }: Props) {
   const clickId = offer.clickId!;
   const claimed = milestone.payoutCents;
   const send = (action: string, ...calls: SimulateInput[]) => run.mutate({ action, calls });
+  const sendEach = (action: string, ...calls: SimulateInput[]) => run.mutate({ action, calls, perCall: true });
   const base = { clickId, event: milestone.key, payoutCents: claimed };
   const busy = run.isPending || reset.isPending;
 
@@ -147,10 +151,10 @@ export function DemoPanel({ userId }: Props) {
         />
         <Action
           title="Send milestones out of order"
-          hint="Last milestone first, then back to the first. Each pays once, independently."
+          hint="Last milestone first, then back to the first. Each pays once, independently; one already paid shows duplicate."
           disabled={busy}
           onClick={() =>
-            send(
+            sendEach(
               'Out of order: ' + [...offer.milestones].reverse().map((m) => m.key).join(' → '),
               ...[...offer.milestones].reverse().map((m) => ({ clickId, event: m.key, payoutCents: m.payoutCents })),
             )
@@ -257,28 +261,24 @@ function Action(props: { title: string; hint: string; disabled: boolean; onClick
   );
 }
 
-// Turn a batch of raw results into a few readable tags, e.g. "credited ×1", "duplicate ×19".
+// One raw result → a readable tag.
+function describe(r: SimulatedResult): { text: string; tone: Tone } {
+  if (r.httpStatus === 401) return { text: '401 bad signature', tone: 'rejected' };
+  if (r.body?.status === 'rejected') return { text: `rejected: ${r.body.reason}`, tone: 'rejected' };
+  if (r.body?.status === 'credited' || r.body?.status === 'duplicate') {
+    return { text: r.body.status, tone: r.body.status };
+  }
+  return { text: `HTTP ${r.httpStatus}`, tone: 'rejected' };
+}
+
+// A batch of raw results → a few tags, e.g. "credited", "duplicate ×19".
 function summarise(results: SimulatedResult[]): { text: string; tone: Tone }[] {
   const counts = new Map<string, { text: string; tone: Tone; n: number }>();
   for (const r of results) {
-    let text: string;
-    let tone: Tone;
-    if (r.httpStatus === 401) {
-      text = '401 bad signature';
-      tone = 'rejected';
-    } else if (r.body?.status === 'rejected') {
-      text = `rejected: ${r.body.reason}`;
-      tone = 'rejected';
-    } else if (r.body?.status === 'credited' || r.body?.status === 'duplicate') {
-      text = r.body.status;
-      tone = r.body.status;
-    } else {
-      text = `HTTP ${r.httpStatus}`;
-      tone = 'rejected';
-    }
-    const existing = counts.get(text);
+    const tag = describe(r);
+    const existing = counts.get(tag.text);
     if (existing) existing.n += 1;
-    else counts.set(text, { text, tone, n: 1 });
+    else counts.set(tag.text, { ...tag, n: 1 });
   }
   return [...counts.values()].map(({ text, tone, n }) => ({ text: n > 1 ? `${text} ×${n}` : text, tone }));
 }

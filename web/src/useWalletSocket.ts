@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import type { WalletCreditedEvent } from './api';
+import { API_URL, type WalletCreditedEvent } from './api';
 
 // Listens for `wallet.credited` for one user. The server puts each connection in a room
 // named after the userId it announces here (no auth in this demo; see the README).
@@ -14,8 +14,9 @@ export function useWalletSocket(userId: string, onCredited: (event: WalletCredit
   });
 
   useEffect(() => {
-    // Same origin: in dev Vite proxies /socket.io to the API (see vite.config.ts).
-    const socket = io({ auth: { userId }, transports: ['websocket'] });
+    // Dev: same origin, Vite proxies /socket.io to the API (see vite.config.ts).
+    // Production: connect straight to the API's URL.
+    const socket = io(API_URL || undefined, { auth: { userId }, transports: ['websocket'] });
     socket.on('wallet.credited', (event: WalletCreditedEvent) => handler.current(event));
     return () => {
       socket.disconnect();

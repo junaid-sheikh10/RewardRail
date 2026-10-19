@@ -1,5 +1,6 @@
 // All calls to the backend live here, so components never build URLs themselves.
 // In dev, /api is proxied to the NestJS API (see vite.config.ts).
+// In production, set VITE_API_URL at build time to the API's public URL.
 
 export type Milestone = {
   id: string;
@@ -23,8 +24,12 @@ export const DEMO_USERS = [
   { id: 'user_bob', name: 'Bob' },
 ] as const;
 
+// '' means "same origin" (dev proxy). The API has no path prefix of its own.
+export const API_URL: string = import.meta.env.VITE_API_URL ?? '';
+const API_BASE = API_URL || '/api';
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });

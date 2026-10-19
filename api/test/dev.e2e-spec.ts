@@ -22,6 +22,7 @@ describe('Dev simulator (demo only)', () => {
 
   afterEach(() => {
     process.env.NODE_ENV = 'test';
+    delete process.env.DEMO_MODE;
   });
 
   afterAll(async () => {
@@ -85,5 +86,13 @@ describe('Dev simulator (demo only)', () => {
     await simulate({ clickId: 'clk_test', event: 'level_10' }).expect(404);
     await request(app.getHttpServer()).post('/dev/reset').send({ userId: 'user_t' }).expect(404);
     expect(await prisma.ledgerEntry.count()).toBe(0);
+  });
+
+  it('DEMO_MODE=true is an explicit opt-in that keeps it available in production', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.DEMO_MODE = 'true';
+    await simulate({ clickId: 'clk_test', event: 'level_10' }).expect(200);
+    process.env.DEMO_MODE = 'yes'; // only the exact value "true" counts
+    await simulate({ clickId: 'clk_test', event: 'level_5' }).expect(404);
   });
 });
