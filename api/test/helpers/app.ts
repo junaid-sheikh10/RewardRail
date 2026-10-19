@@ -1,12 +1,15 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.setup';
 import { PrismaService } from '../../src/prisma/prisma.service';
 
 // Boots the real app (real database, real validation) for e2e tests.
-export async function createTestApp(): Promise<{ app: INestApplication; prisma: PrismaService }> {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+// `configure` lets a test swap a provider, e.g. a fake claim classifier instead of a real model.
+export async function createTestApp(
+  configure: (builder: TestingModuleBuilder) => TestingModuleBuilder = (b) => b,
+): Promise<{ app: INestApplication; prisma: PrismaService }> {
+  const moduleRef = await configure(Test.createTestingModule({ imports: [AppModule] })).compile();
   const app = moduleRef.createNestApplication({ rawBody: true });
   configureApp(app);
   await app.init();

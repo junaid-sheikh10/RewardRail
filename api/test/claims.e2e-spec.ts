@@ -1,15 +1,17 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { CLAIM_CLASSIFIER, DisabledClaimClassifier } from '../src/claims/claim-classifier';
 import { createTestApp, resetDb } from './helpers/app';
 import { makeBody, sendPostback, seedBasics } from './helpers/postbacks';
 
-describe('POST /claims (Phase 6: rules only so far)', () => {
+describe('POST /claims: rules and fallback (no model)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
 
   beforeAll(async () => {
-    ({ app, prisma } = await createTestApp());
+    // Rules-only: no model is ever consulted in this file.
+    ({ app, prisma } = await createTestApp((b) => b.overrideProvider(CLAIM_CLASSIFIER).useValue(new DisabledClaimClassifier())));
   });
 
   afterAll(async () => {

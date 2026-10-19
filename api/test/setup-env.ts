@@ -10,3 +10,7 @@ if (!process.env.TEST_DATABASE_URL) {
 }
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.POSTBACK_SECRET = process.env.POSTBACK_SECRET || 'test-secret';
+
+// Tests must never reach a real (paid) model, even if the developer's .env has a key.
+// Specs that need a model plug in a fake classifier instead.
+process.env.LLM_API_KEY = '';

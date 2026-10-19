@@ -1,15 +1,29 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CLAIM_CLASSIFIER, ClaimClassifier, MIN_CONFIDENCE, parseClassification } from './claim-classifier';
 import { applyRules, ClaimFacts } from './claim-rules';
 import { CreateClaimDto } from './create-claim.dto';
 
 const NEEDS_HUMAN_REPLY =
   "Thanks, we couldn't settle this automatically. A support agent will look at it and get back to you.";
 
+type Outcome = {
+  status: 'resolved' | 'needs_human';
+  category: 'already_credited' | 'not_started' | 'postback_rejected' | 'not_tracked_yet' | 'likely_fraud' | 'needs_human';
+  source: 'rules' | 'llm' | 'fallback';
+  confidence?: number;
+  reply: string;
+};
+
 @Injectable()
 export class ClaimsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ClaimsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(CLAIM_CLASSIFIER) private readonly classifier: ClaimClassifier,
+  ) {}
 
   // "I reached level 10 but wasn't paid."
   //
@@ -21,12 +35,10 @@ export class ClaimsService {
 
     // Step 2: deterministic rules first (free, instant, can't hallucinate).
     const answer = applyRules(facts);
-
-    // Step 3 (the model) plugs in here. Until it does, anything the rules can't decide
-    // goes to the human queue, which is also what happens when the model is unavailable.
-    const result = answer
-      ? { status: 'resolved' as const, category: answer.category, source: 'rules' as const, reply: answer.reply }
-      : { status: 'needs_human' as const, category: 'needs_human' as const, source: 'fallback' as const, reply: NEEDS_HUMAN_REPLY };
+    // Step 3: only if the rules can't decide, ask the model; any problem ends at a human.
+    const result: Outcome = answer
+      ? { status: 'resolved', category: answer.category, source: 'rules', reply: answer.reply }
+      : await this.askModel(dto.message, facts);
 
     try {
       return await this.prisma.claim.create({
@@ -39,6 +51,51 @@ export class ClaimsService {
       }
       throw error;
     }
+  }
+
+  // The model only CLASSIFIES and DRAFTS A REPLY. Its output is untrusted input: parsed,
+  // validated with zod, and checked against a confidence floor. Every way this can go
+  // wrong (no key, network error, refusal, invalid JSON, wrong shape, low confidence)
+  // ends the same safe way: the claim waits for a person.
+  private async askModel(message: string, facts: ClaimFacts): Promise<Outcome> {
+    const toHuman = (confidence?: number): Outcome => ({
+      status: 'needs_human',
+      category: 'needs_human',
+      source: 'fallback',
+      confidence,
+      reply: NEEDS_HUMAN_REPLY,
+    });
+
+    if (!this.classifier.isEnabled()) return toHuman();
+
+    let raw: unknown;
+    try {
+      raw = await this.classifier.classify({ message, facts });
+    } catch (error) {
+      this.logger.warn(`Claim triage model call failed: ${(error as Error).message}`);
+      return toHuman();
+    }
+
+    const parsed = parseClassification(raw);
+    if (!parsed.ok) {
+      this.logger.warn(`Claim triage output rejected (${parsed.reason})`);
+      return toHuman();
+    }
+
+    const { category, confidence, reply } = parsed.value;
+    if (confidence < MIN_CONFIDENCE) return toHuman(confidence); // keep the number for the admin
+    if (category === 'needs_human') return { status: 'needs_human', category, source: 'llm', confidence, reply: NEEDS_HUMAN_REPLY };
+    return { status: 'resolved', category, source: 'llm', confidence, reply };
+  }
+
+  // The support queue (and history). Newest first, capped.
+  list(status?: 'resolved' | 'needs_human') {
+    return this.prisma.claim.findMany({
+      where: status ? { status } : undefined,
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { offer: { select: { title: true } }, user: { select: { displayName: true } } },
+    });
   }
 
   // Step 1: code (not the model) collects the facts.
