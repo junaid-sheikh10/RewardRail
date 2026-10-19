@@ -1,0 +1,17 @@
+{
+  "name": "rewardrail",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mini rewarded user acquisition platform: postbacks, ledger, offer wall.",
+  "workspaces": [
+    "api",
+    "web"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "dev:api": "npm run start:dev --workspace api",
+    "dev:web": "npm run dev --workspace web",
+    "test": "npm run test:e2e --workspace api"
+  }
+}

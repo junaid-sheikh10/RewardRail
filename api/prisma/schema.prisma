@@ -1,0 +1,116 @@
+// RewardRail data model. See CLAUDE.md → "Data model" for the reasoning.
+//
+// Money rule: every amount is an integer number of cents. Never floats.
+// Ledger rule: LedgerEntry is append-only. A user's balance is SUM(amountCents);
+// there is deliberately no `balance` column that could drift or be overwritten.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String        @id @default(cuid())
+  displayName   String
+  createdAt     DateTime      @default(now())
+  clicks        Click[]
+  ledgerEntries LedgerEntry[]
+}
+
+model Offer {
+  id            String        @id @default(cuid())
+  title         String
+  description   String
+  imageUrl      String?
+  createdAt     DateTime      @default(now())
+  milestones    Milestone[]
+  clicks        Click[]
+  ledgerEntries LedgerEntry[]
+}
+
+model Milestone {
+  id            String        @id @default(cuid())
+  offerId       String
+  offer         Offer         @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  key           String // what the advertiser sends as `event`, e.g. "level_10"
+  label         String // what the user sees, e.g. "Reach level 10"
+  payoutCents   Int // the source of truth for how much we pay (never trust the postback amount)
+  sortOrder     Int           @default(0)
+  ledgerEntries LedgerEntry[]
+
+  @@unique([offerId, key])
+}
+
+// Created when a user taps "Start offer". The clickId travels through the
+// advertiser's tracking link and comes back to us inside every postback.
+model Click {
+  id        String   @id @default(cuid())
+  clickId   String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offerId   String
+  offer     Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  // One click per user and offer: tapping "Start offer" twice (even at the same
+  // moment) must give back the same clickId. The database enforces it.
+  @@unique([userId, offerId])
+  @@index([userId])
+}
+
+enum PostbackStatus {
+  credited // a ledger entry was created for it
+  duplicate // new eventId, but this user was already paid for this milestone
+  rejected // unknown click, unknown milestone, etc. See rejectReason.
+}
+
+// Every postback we accept (valid signature) is stored, including rejected ones,
+// so we can answer "why wasn't I paid?" later. Same eventId twice is not stored
+// twice: the UNIQUE constraint on eventId is what makes retries safe.
+model Postback {
+  id           String         @id @default(cuid())
+  eventId      String         @unique
+  // Plain string, NOT a foreign key to Click: we also want to keep postbacks
+  // that reference a clickId we don't know (status = rejected, unknown_click).
+  clickId      String
+  eventKey     String
+  payoutCents  Int // what the advertiser claimed; we pay Milestone.payoutCents
+  rawPayload   Json
+  status       PostbackStatus
+  rejectReason String?
+  receivedAt   DateTime       @default(now())
+  ledgerEntry  LedgerEntry?
+
+  @@index([clickId])
+}
+
+enum LedgerEntryType {
+  reward
+  // later: cashout (negative amountCents, no milestone/postback)
+}
+
+model LedgerEntry {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amountCents Int
+  type        LedgerEntryType @default(reward)
+  // Optional so that future non-reward entries (cash-outs) fit the same table.
+  // Postgres treats NULLs as distinct in UNIQUE constraints, so they don't clash.
+  offerId     String?
+  offer       Offer?          @relation(fields: [offerId], references: [id])
+  milestoneId String?
+  milestone   Milestone?      @relation(fields: [milestoneId], references: [id])
+  postbackId  String?         @unique // one postback can pay at most once
+  postback    Postback?       @relation(fields: [postbackId], references: [id])
+  createdAt   DateTime        @default(now())
+
+  // The final safety net: a user can be paid for a milestone only once,
+  // even if two different eventIds race each other.
+  @@unique([userId, milestoneId])
+  @@index([userId])
+}
